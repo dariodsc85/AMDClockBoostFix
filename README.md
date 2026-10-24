@@ -63,16 +63,16 @@ The clock is reapplied after signing in to the Windows account, not before the l
 - RX 6950 XT
 
 | RX 7000 | 
-RX 7400
-RX 7600 
-RX 7650 GRE
-RX 7600 XT
-RX 7700
-RX 7700 XT
-RX 7800 XT
-RX 7900 GRE
-RX 7900 XT
-RX 7900 XTX
+- RX 7400
+- RX 7600 
+- RX 7650 GRE
+- RX 7600 XT
+- RX 7700
+- RX 7700 XT
+- RX 7800 XT
+- RX 7900 GRE
+- RX 7900 XT
+- RX 7900 XTX
 
 
 <img width="82" height="261" alt="image" src="https://github.com/user-attachments/assets/807c480b-fd7b-4e7e-9c8d-384273aadadc" />
