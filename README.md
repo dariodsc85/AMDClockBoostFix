@@ -74,11 +74,6 @@ The clock is reapplied after signing in to the Windows account, not before the l
 - RX 7900 XT
 - RX 7900 XTX
 
-
-<img width="82" height="261" alt="image" src="https://github.com/user-attachments/assets/807c480b-fd7b-4e7e-9c8d-384273aadadc" />
-
-<img width="81" height="261" alt="image" src="https://github.com/user-attachments/assets/0f4b388b-570e-4aaf-acbe-f84c78280f41" />
-
 ## Licença e dependências
 
 O código-fonte próprio está sob MIT. A MIT do projeto não cobre as bindings ADLX da AMD incluídas no executável; consulte **THIRD_PARTY_NOTICES.md** antes de redistribuir o binário.
