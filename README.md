@@ -1,79 +1,60 @@
-# PORTUGUES
 # AMD Clock Boost Fix
 
-Este app serve para aplicar o clock boost de referência da AMD
-Algumas fabricantes elevam o clock boost além do permitido para a GPU, com isso pode ocorrer o erro de tempo limite de driver (AMD Timeout)
+Utilitário leve para Windows que aplica e mantém o **clock boost de referência oficial** em placas de vídeo AMD Radeon (séries RX 500, RX 6000 e RX 7000) utilizando a API oficial **AMD ADLX**, prevenindo picos de boost acima da especificação de fábrica e instabilidades/timeouts de driver.
 
-## Uso
+---
 
-1. Baixe o **AMDClockBoostFix.exe** e coloque em uma pasta definitiva (Que não será excluida).
-2. Abra **AMDClockBoostFix.exe** e aplique a referência da GPU identificada.
-3. Marque **Reaplicar automaticamente ao entrar no Windows** para habilitar a reaplicação após o login.
-4. Use **Restaurar clock boost original** para voltar ao valor padrão informado pelo driver AMD. Essa ação desativa a reaplicação automática para que a referência do programa não seja aplicada novamente no próximo login.
+## Principais Recursos
 
-A opção cria um atalho na pasta Inicializar do usuário atual. Nas próximas inicializações, o programa espera 15 segundos pelo driver, consulta a GPU e reaplica a referência sem abrir janela. Se a consulta ao driver falhar, faz até cinco tentativas. Se o perfil salvo não corresponder à GPU ou não houver exatamente um perfil compatível, não altera o clock.
+- **Sem Overclock:** Aplica exclusivamente o clock boost de referência oficial catalogado para o modelo detectado — nunca valores arbitrários.
+- **Isolamento de Processo:** Toda a comunicação com a DLL nativa do driver (`ADLX`) ocorre em um processo *worker* isolado, evitando travamentos ou vazamentos de memória na interface.
+- **Validação Rigorosa antes de Aplicar:**
+  - Verifica o `VendorId` (`1002`) e bloqueia a operação caso mais de uma GPU idêntica seja detectada.
+  - Valida se o clock de referência está estritamente dentro dos limites mínimo e máximo reportados pelo driver atual.
+  - Realiza leitura de retorno (*readback*) após a escrita para confirmar que o driver aplicou o valor exato.
+- **Restauração com 1 Clique:** Restaura o clock boost padrão original reportado pelo driver e desativa a reaplicação automática.
+- **Reaplicação Automática no Logon:** Integração nativa via Registro do Windows (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`) com retentativas inteligentes após o login para aguardar a inicialização do driver AMD.
 
-Para desativar, desmarque a opção dentro do programa. Também é possível remover o atalho em `shell:startup` ou desativar o app em **Configurações > Aplicativos > Inicialização**. Não é criada tarefa agendada e não é necessário executar como administrador.
+---
 
-## Diagnóstico do modo silencioso
+## Novidades da Versão 2.4
 
-Cada tentativa automática grava o resultado em `%LOCALAPPDATA%\AMDClockBoostFix\startup.log`. O modelo e o clock salvos ficam em `settings.json` na mesma pasta. A janela do programa aparece somente quando ele é aberto manualmente.
+- **Inicialização via Registro do Windows:** Substituição do atalho na pasta *Inicializar* pela chave `Run` do usuário atual (`HKCU`), migrando e removendo automaticamente atalhos `.lnk` de versões anteriores.
+- **Proteção contra Instâncias Simultâneas:** Uso de *Mutex* global no Windows para impedir conflitos entre a interface gráfica e a tarefa automática pós-login.
+- **Inicialização mais Rápida:** Atraso inicial pós-login reduzido para 4 segundos com até 8 tentativas automáticas de consulta ao driver.
+- **Endurecimento de Segurança e Estabilidade:** Validação estrita do diretório de saída do *worker* em `%LOCALAPPDATA%\AMDClockBoostFix` e ordenação segura na liberação de interfaces COM/ADLX.
 
-A reaplicação acontece após entrar na conta do Windows, não antes da tela de login. O clock é configurado pelo ADLX e confirmado com leitura do driver; não é gravado no firmware/BIOS nem em arquivos do Adrenalin. Se o driver redefinir o valor, a inicialização reaplica a referência salva.
+---
 
-# ENGLISH
-# AMD Clock Boost Fix
+## GPUs Suportadas
 
-This app applies AMD's reference GPU boost clock.
+| Série | Modelos Catalogados |
+| :--- | :--- |
+| **Radeon RX 500** | RX 550, RX 560, RX 570, RX 580, RX 580 2048SP, RX 590 |
+| **Radeon RX 6000** | RX 6400, RX 6500 XT, RX 6600, RX 6600 XT, RX 6650 XT, RX 6700, RX 6700 XT, RX 6750 XT, RX 6800, RX 6800 XT, RX 6900 XT, RX 6950 XT |
+| **Radeon RX 7000** | RX 7400, RX 7600, RX 7600 XT, RX 7650 GRE, RX 7700, RX 7700 XT, RX 7800 XT, RX 7900 GRE, RX 7900 XT, RX 7900 XTX |
 
-Some manufacturers set the GPU boost clock higher than the recommended limit, which may cause driver timeout errors (AMD Timeout).
+---
 
-## Usage
+## Como Usar
 
-1. Download **AMDClockBoostFix.exe** and place it in a permanent folder (one that will not be deleted).
-2. Open **AMDClockBoostFix.exe** and apply the reference value for the detected GPU.
-3. Check **Automatically reapply at Windows sign-in** to enable automatic reapplication after logging in.
-4. Use **Restore original boost clock** to revert to the default value reported by the AMD driver. This action disables automatic reapplication to prevent the program's reference value from being applied again at the next sign-in.
+1. Baixe o executável `AMDClockBoostFix.exe` na aba **Releases** (ou execute via Python).
+2. Abra o aplicativo e aguarde a identificação automática da sua GPU AMD.
+3. Clique em **Aplicar referência da GPU** e aguarde a confirmação do driver.
+4. *(Opcional)* Marque **Reaplicar automaticamente ao entrar no Windows** para que o limite seja reaplicado sempre que você fizer login.
+5. Para voltar ao comportamento padrão de fábrica da placa, clique em **Restaurar clock boost original**.
 
-This option creates a shortcut in the current user's Startup folder. During subsequent system startups, the program waits 15 seconds for the driver to initialize, queries the GPU, and reapplies the reference value without opening a window. If the driver query fails, the program makes up to five attempts. If the saved profile does not match the GPU or there is not exactly one compatible profile, the clock is left unchanged.
+> **Nota:** Configurações locais e logs de inicialização são armazenados em `%LOCALAPPDATA%\AMDClockBoostFix\` (`settings.json` e `startup.log`).
 
-To disable this feature, uncheck the option within the program. You can also remove the shortcut from `shell:startup` or disable the app under **Settings > Apps > Startup**. No scheduled task is created, and running the program as an administrator is not required.
+---
 
-## Silent Mode Diagnostics
+## Executando ou Compilando a partir do Código-Fonte
 
-Each automatic attempt logs its result to `%LOCALAPPDATA%\AMDClockBoostFix\startup.log`. The saved GPU model and clock value are stored in `settings.json` in the same folder. The program window only appears when the app is opened manually.
+### Requisitos
+- Windows 10 ou Windows 11 (64-bit)
+- Driver AMD Software: Adrenalin Edition instalado
+- Python 3.11+
 
-The clock is reapplied after signing in to the Windows account, not before the login screen. The clock is configured through ADLX and verified by reading the value reported by the driver. It is not written to the firmware/BIOS or to any Adrenalin files. If the driver resets the value, the saved reference is reapplied at startup.
-
-
-## Perfis incluídos
-
-| RX 6000 | 
-- RX 6400
-- RX 6500 XT
-- RX 6600
-- RX 6600 XT
-- RX 6650 XT
-- RX 6700
-- RX 6700 XT
-- RX 6750 XT
-- RX 6800
-- RX 6800 XT
-- RX 6900 XT
-- RX 6950 XT
-
-| RX 7000 | 
-- RX 7400
-- RX 7600 
-- RX 7650 GRE
-- RX 7600 XT
-- RX 7700
-- RX 7700 XT
-- RX 7800 XT
-- RX 7900 GRE
-- RX 7900 XT
-- RX 7900 XTX
-
-## Licença e dependências
-
-O código-fonte próprio está sob MIT. A MIT do projeto não cobre as bindings ADLX da AMD incluídas no executável; consulte **THIRD_PARTY_NOTICES.md** antes de redistribuir o binário.
+### Execução Direta
+```powershell
+python amd_clock_boost_fix.py

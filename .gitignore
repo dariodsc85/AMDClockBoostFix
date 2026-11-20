@@ -1,0 +1,21 @@
+# Build e empacotamento (PyInstaller)
+build/
+dist/
+_internal/
+*.spec
+*.exe
+
+# Ambiente e cache Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# Arquivos locais de desenvolvimento / backup
+amd_clock_boost_fix_reference.py
+
+# Logs e configurações locais de teste
+*.log
+settings.json

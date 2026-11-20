@@ -1,23 +1,56 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 AMD Clock Boost Fix contributors
 from __future__ import annotations
-import argparse, ctypes, gc, json, os, re, subprocess, sys, threading, time, tkinter as tk, uuid, winreg
+
+import argparse
+import ctypes
+import gc
+import json
+import os
+import re
+import subprocess
+import sys
+import threading
+import time
+import tkinter as tk
+import winreg
 from pathlib import Path
 from tkinter import messagebox, ttk
+from typing import Any
 
 APP = "AMDClockBoostFix"
+APP_VERSION = "2.4"  # Controle interno de versão (não exposto na interface gráfica)
 LEGACY_APP = "RX7600ClockHelper"
 BASE = Path(__file__).resolve().parent
+BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", BASE))
 ICON_RELATIVE_PATH = Path("assets") / "amd_clock_boost_fix.ico"
+RUN_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
+RUN_REG_VALUE = "AMDClockBoostFix"
+MUTEX_NAME = r"Global\AMDClockBoostFix_SingleInstance_Mutex"
 
-def app_icon_path():
+for _search_dir in (str(BUNDLE_ROOT), str(BASE)):
+    if _search_dir not in sys.path:
+        sys.path.insert(0, _search_dir)
+
+# Hidden import explícito apenas para análise estática do PyInstaller (nunca executado na UI)
+if False:  # pragma: no cover
+    from adlx import ADLX  # noqa: F401
+
+
+def app_icon_path() -> Path:
     """Locate the bundled app icon in source and PyInstaller builds."""
-    bundle_root = Path(getattr(sys, "_MEIPASS", BASE))
-    return bundle_root / ICON_RELATIVE_PATH
+    return BUNDLE_ROOT / ICON_RELATIVE_PATH
+
 
 # Referências fixas (não são valores de overclock escolhidos pelo usuário).
 # Adicione novos modelos somente após confirmar ID PCI e clock boost de referência.
-GPU_PROFILES = {
+GPU_PROFILES: dict[str, dict[str, Any]] = {
+    "RX 550": {"series": "RX 500", "reference_boost_mhz": 1183},
+    "RX 560": {"series": "RX 500", "reference_boost_mhz": 1275},
+    "RX 570": {"series": "RX 500", "reference_boost_mhz": 1244},
+    "RX 580": {"series": "RX 500", "reference_boost_mhz": 1340},
+    "RX 590": {"series": "RX 500", "reference_boost_mhz": 1545},
+    "RX 580 2048SP": {"series": "RX 500", "reference_boost_mhz": 1284},
     "RX 6400": {"series": "RX 6000", "reference_boost_mhz": 2321},
     "RX 6500 XT": {"series": "RX 6000", "reference_boost_mhz": 2815},
     "RX 6600": {"series": "RX 6000", "reference_boost_mhz": 2491},
@@ -42,7 +75,8 @@ GPU_PROFILES = {
     "RX 7900 XTX": {"series": "RX 7000", "reference_boost_mhz": 2500},
 }
 
-def normalize_gpu_name(name):
+
+def normalize_gpu_name(name: str) -> str:
     normalized = re.sub(r"[^a-z0-9]", "", str(name).casefold())
     for prefix in ("amdradeon", "radeon", "amd"):
         if normalized.startswith(prefix):
@@ -50,117 +84,112 @@ def normalize_gpu_name(name):
             break
     return normalized.replace("graphics", "").replace("series", "")
 
-def profile_for_gpu_name(name):
+
+def profile_for_gpu_name(name: str) -> str | None:
     normalized = normalize_gpu_name(name)
     return next((model for model in GPU_PROFILES if normalized == normalize_gpu_name(model)), None)
 
-def appdata():
+
+def appdata() -> Path:
     p = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local")) / APP
     p.mkdir(parents=True, exist_ok=True)
     return p
 
-def settings_file():
+
+def settings_file() -> Path:
     return appdata() / "settings.json"
 
-def read_settings():
+
+def read_settings() -> dict[str, Any]:
     try:
         data = json.loads(settings_file().read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError, json.JSONDecodeError):
         return {}
 
-def write_settings(data):
+
+def write_settings(data: dict[str, Any]) -> None:
     path = settings_file()
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     temporary.replace(path)
 
-def startup_link_path():
+
+def legacy_startup_link_path() -> Path | None:
     roaming = os.environ.get("APPDATA")
     if not roaming:
-        raise OSError("A pasta AppData do usuário não está disponível.")
-    folder = Path(roaming) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
-    folder.mkdir(parents=True, exist_ok=True)
-    return folder / "AMD Clock Boost Fix.lnk"
+        return None
+    return Path(roaming) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / "AMD Clock Boost Fix.lnk"
 
-class _GUID(ctypes.Structure):
-    _fields_ = [("Data1", ctypes.c_uint32), ("Data2", ctypes.c_uint16),
-                ("Data3", ctypes.c_uint16), ("Data4", ctypes.c_ubyte * 8)]
 
-def _guid(value):
-    raw = uuid.UUID(value).bytes_le
-    result = _GUID()
-    ctypes.memmove(ctypes.byref(result), raw, 16)
-    return result
+def remove_legacy_startup_shortcut() -> None:
+    link = legacy_startup_link_path()
+    if link is not None:
+        try:
+            link.unlink()
+        except OSError:
+            pass
 
-def create_startup_shortcut():
-    link_path = startup_link_path()
+
+def build_startup_command() -> str:
     if getattr(sys, "frozen", False):
         target = str(Path(sys.executable).resolve())
-        arguments = "--startup-apply --silent"
-        working_dir = str(Path(target).parent)
-    else:
-        target = str(Path(sys.executable).resolve())
-        script = str(Path(__file__).resolve())
-        arguments = f'"{script}" --startup-apply'
-        working_dir = str(Path(script).parent)
+        return f'"{target}" --startup-apply'
+    target = str(Path(sys.executable).resolve())
+    script = str(Path(__file__).resolve())
+    return f'"{target}" "{script}" --startup-apply'
 
-    ole32 = ctypes.WinDLL("ole32")
-    ole32.CoInitialize.argtypes = [ctypes.c_void_p]
-    ole32.CoInitialize.restype = ctypes.c_long
-    ole32.CoCreateInstance.argtypes = [ctypes.POINTER(_GUID), ctypes.c_void_p, ctypes.c_uint32,
-                                       ctypes.POINTER(_GUID), ctypes.POINTER(ctypes.c_void_p)]
-    ole32.CoCreateInstance.restype = ctypes.c_long
-    ole32.CoUninitialize.argtypes = []
-    ole32.CoUninitialize.restype = None
-    init_result = ole32.CoInitialize(None)
-    initialized_here = init_result >= 0
-    clsid_shell_link = _guid("00021401-0000-0000-C000-000000000046")
-    iid_shell_link = _guid("000214F9-0000-0000-C000-000000000046")
-    iid_persist_file = _guid("0000010B-0000-0000-C000-000000000046")
-    shell_link = ctypes.c_void_p()
-    persist = ctypes.c_void_p()
-    hr = ole32.CoCreateInstance(ctypes.byref(clsid_shell_link), None, 1,
-                                ctypes.byref(iid_shell_link), ctypes.byref(shell_link))
-    if hr < 0:
-        if initialized_here: ole32.CoUninitialize()
-        raise OSError(f"Não foi possível criar atalho do Windows (HRESULT 0x{hr & 0xffffffff:08X}).")
 
-    def method(pointer, index, restype, *argtypes):
-        table = ctypes.cast(pointer, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
-        return ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(table[index])
-
+def is_startup_enabled() -> bool:
     try:
-        for index, value in ((20, target), (11, arguments), (9, working_dir),
-                             (7, "AMD Clock Boost Fix — reaplicar referência ao entrar no Windows")):
-            hr = method(shell_link, index, ctypes.c_long, ctypes.c_wchar_p)(shell_link, value)
-            if hr < 0:
-                raise OSError(f"Falha ao montar o atalho do Windows (HRESULT 0x{hr & 0xffffffff:08X}).")
-        query = method(shell_link, 0, ctypes.c_long, ctypes.POINTER(_GUID), ctypes.POINTER(ctypes.c_void_p))
-        hr = query(shell_link, ctypes.byref(iid_persist_file), ctypes.byref(persist))
-        if hr < 0:
-            raise OSError(f"Não foi possível preparar o atalho do Windows (HRESULT 0x{hr & 0xffffffff:08X}).")
-        hr = method(persist, 6, ctypes.c_long, ctypes.c_wchar_p, ctypes.c_int)(persist, str(link_path), 1)
-        if hr < 0:
-            raise OSError(f"Não foi possível salvar o atalho na pasta Inicializar (HRESULT 0x{hr & 0xffffffff:08X}).")
-    finally:
-        if persist:
-            method(persist, 2, ctypes.c_ulong)(persist)
-        if shell_link:
-            method(shell_link, 2, ctypes.c_ulong)(shell_link)
-        if initialized_here:
-            ole32.CoUninitialize()
-    return link_path
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_REG_PATH, 0, winreg.KEY_READ) as key:
+            value, _ = winreg.QueryValueEx(key, RUN_REG_VALUE)
+            return bool(value)
+    except OSError:
+        return False
 
-def remove_startup_shortcut():
-    link = startup_link_path()
+
+def enable_startup_entry() -> str:
+    command = build_startup_command()
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_REG_PATH, 0, winreg.KEY_SET_VALUE) as key:
+        winreg.SetValueEx(key, RUN_REG_VALUE, 0, winreg.REG_SZ, command)
+    remove_legacy_startup_shortcut()
+    return command
+
+
+def disable_startup_entry() -> None:
+    remove_legacy_startup_shortcut()
     try:
-        link.unlink()
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_REG_PATH, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.DeleteValue(key, RUN_REG_VALUE)
     except FileNotFoundError:
         pass
-    return link
 
-def apply_saved_startup_profile():
+
+def acquire_single_instance_mutex(name: str = MUTEX_NAME) -> tuple[bool, int | None]:
+    """Acquire a named Windows Mutex to prevent concurrent instances."""
+    if os.name != "nt":
+        return True, None
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    handle = kernel32.CreateMutexW(None, False, name)
+    if not handle:
+        return True, None
+    error_already_exists = 183
+    if ctypes.get_last_error() == error_already_exists:
+        kernel32.CloseHandle(handle)
+        return False, None
+    return True, int(handle)
+
+
+def release_single_instance_mutex(handle: int | None) -> None:
+    if handle and os.name == "nt":
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CloseHandle(ctypes.c_void_p(handle))
+
+
+def apply_saved_startup_profile() -> dict[str, Any]:
     settings_exist = settings_file().exists()
     saved = read_settings()
     if settings_exist and not saved.get("startup_enabled"):
@@ -181,25 +210,27 @@ def apply_saved_startup_profile():
         if reference != GPU_PROFILES[profile]["reference_boost_mhz"]:
             return {"ok": False, "error": "O clock salvo não corresponde à referência oficial do perfil."}
 
-    checked = None
-    for attempt in range(5):
+    checked: dict[str, Any] | None = None
+    for attempt in range(8):
         checked = run_worker("check")
         if checked.get("ok"):
             break
-        if attempt < 4:
-            time.sleep(5)
+        if attempt < 7:
+            time.sleep(3)
     if not checked or not checked.get("ok"):
         return checked or {"ok": False, "error": "Não foi possível consultar o driver AMD após o login."}
 
     adapters = checked.get("adapters", [])
     if has_saved_profile:
-        matches = [adapter for adapter in adapters
-                   if adapter.get("gpu") == expected_gpu and adapter.get("profile_name") == profile]
+        matches = [
+            adapter for adapter in adapters
+            if adapter.get("gpu") == expected_gpu and adapter.get("profile_name") == profile
+        ]
         if len(matches) != 1:
             return {"ok": False, "error": "A GPU atual não corresponde de forma única ao perfil salvo; nenhuma alteração foi feita."}
         adapter = matches[0]
     else:
-        candidates = {}
+        candidates: dict[str, list[dict[str, Any]]] = {}
         for adapter in adapters:
             model = adapter.get("profile_name")
             if not model or not adapter.get("supported"):
@@ -231,8 +262,10 @@ def apply_saved_startup_profile():
             result["warning"] = f"O clock foi aplicado, mas o perfil local não pôde ser salvo: {exc}"
     return result
 
-def write_startup_log(result):
+
+def write_startup_log(result: dict[str, Any]) -> None:
     record = {
+        "version": APP_VERSION,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "ok": bool(result.get("ok")),
         "gpu": result.get("gpu") or result.get("startup_gpu"),
@@ -244,39 +277,64 @@ def write_startup_log(result):
     log_path = appdata() / "startup.log"
     log_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
 
-def cleanup_legacy_restart_confirmation():
-    # Remove apenas o RunOnce e o estado pendente criados pelo RX7600 Clock Helper 1.6.
+
+def cleanup_legacy_restart_confirmation() -> None:
+    """Remove apenas o RunOnce e o estado pendente criados pelo RX7600 Clock Helper 1.6."""
     try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                            r"Software\Microsoft\Windows\CurrentVersion\RunOnce",
-                            0, winreg.KEY_SET_VALUE) as key:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\RunOnce",
+            0,
+            winreg.KEY_SET_VALUE,
+        ) as key:
             winreg.DeleteValue(key, LEGACY_APP + "Confirm")
     except OSError:
         pass
     old_pending = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local")) / LEGACY_APP / "pending_restart.json"
-    try: old_pending.unlink()
-    except FileNotFoundError: pass
-    except OSError: pass
+    try:
+        old_pending.unlink()
+    except OSError:
+        pass
 
-def write_worker_result(path, data):
+
+def validate_result_file_path(path: str | Path) -> Path:
+    """Ensure worker output path stays strictly inside the application AppData folder."""
+    allowed_dir = appdata().resolve()
+    target = Path(path).resolve()
+    if target.parent != allowed_dir or target.suffix.lower() != ".json":
+        raise ValueError("Caminho de arquivo de resultado fora do diretório permitido.")
+    return target
+
+
+def write_worker_result(path: str | Path | None, data: dict[str, Any]) -> None:
     encoded = json.dumps(data, ensure_ascii=False)
     if path:
-        Path(path).write_text(encoded, encoding="utf-8")
+        safe_path = validate_result_file_path(path)
+        safe_path.write_text(encoded, encoding="utf-8")
     elif sys.stdout is not None:
         print(encoded, flush=True)
 
-def read_gpu_info(gpu, tuning):
+
+def read_gpu_info(gpu: Any, tuning: Any) -> dict[str, Any]:
     manual = None
     try:
+        profile_name = profile_for_gpu_name(gpu.Name())
         if not tuning.IsSupportedManualGFXTuning(gpu):
-            return {"gpu": gpu.Name(), "profile_name": profile_for_gpu_name(gpu.Name()),
-                    "supported": False, "error": "Ajuste manual não suportado pelo driver."}
+            return {
+                "gpu": gpu.Name(),
+                "profile_name": profile_name,
+                "supported": False,
+                "error": "Ajuste manual não suportado pelo driver.",
+            }
         manual = tuning.GetManualGFXTuning2(gpu)
         if manual is None:
-            return {"gpu": gpu.Name(), "profile_name": profile_for_gpu_name(gpu.Name()),
-                    "supported": False, "error": "Interface ADLX indisponível."}
+            return {
+                "gpu": gpu.Name(),
+                "profile_name": profile_name,
+                "supported": False,
+                "error": "Interface ADLX indisponível.",
+            }
         limits = manual.GetGPUMaxFrequencyRange()
-        profile_name = profile_for_gpu_name(gpu.Name())
         profile_clock = GPU_PROFILES[profile_name]["reference_boost_mhz"] if profile_name else None
         return {
             "gpu": gpu.Name(),
@@ -292,148 +350,144 @@ def read_gpu_info(gpu, tuning):
         manual = None
         gc.collect()
 
-def worker(mode, profile_id=None, result_file=None):
-    helper = None
-    initialized = False
+
+def _apply_frequency(
+    gpu: Any,
+    tuning: Any,
+    profile_id: str,
+    info: dict[str, Any],
+    target_mhz: int,
+    ADLX: Any,
+    *,
+    is_restore: bool = False,
+) -> tuple[dict[str, Any], int]:
+    if not info["minimum_mhz"] <= target_mhz <= info["maximum_mhz"]:
+        label = (
+            f"O padrão do driver ({target_mhz} MHz) está fora da faixa atual."
+            if is_restore
+            else f"{target_mhz} MHz está fora da faixa do driver ({info['minimum_mhz']}–{info['maximum_mhz']} MHz)."
+        )
+        return {"ok": False, "error": label, **info}, 8
+
+    manual = None
+    try:
+        manual = tuning.GetManualGFXTuning2(gpu)
+        if manual is None:
+            action = "restaurar o padrão" if is_restore else "aplicar o perfil"
+            return {"ok": False, "error": f"Interface ADLX indisponível para {action}.", **info}, 9
+        result = manual.SetGPUMaxFrequency(target_mhz)
+        readback = int(manual.GetGPUMaxFrequency())
+    finally:
+        manual = None
+        gc.collect()
+
+    if result != ADLX.ADLX_RESULT.ADLX_OK or readback != target_mhz:
+        action = "a restauração para" if is_restore else ""
+        prefix = f"O driver não confirmou {action} {target_mhz} MHz".replace("  ", " ")
+        return {
+            "ok": False,
+            "error": f"{prefix} (leitura: {readback} MHz).",
+            "current_mhz": readback,
+            **info,
+        }, 10
+
+    payload: dict[str, Any] = {
+        "ok": True,
+        "applied_mhz": readback,
+        **info,
+        "profile_name": profile_id,
+    }
+    if is_restore:
+        payload["restored_default_mhz"] = target_mhz
+    else:
+        payload["reference_boost_mhz"] = target_mhz
+    return payload, 0
+
+
+def _run_adlx_operation(mode: str, profile_id: str | None) -> tuple[dict[str, Any], int]:
+    from adlx import ADLX
+
+    helper = ADLX.ADLXHelper()
+    if helper.Initialize() != ADLX.ADLX_RESULT.ADLX_OK:
+        return {"ok": False, "error": "ADLX não inicializou. Confira o driver AMD."}, 2
+
     services = tuning = gpu = gpu_list = amd_gpus = matches = None
-    payload = {"ok": False, "error": "O worker ADLX não concluiu a operação."}
+    payload: dict[str, Any] = {"ok": False, "error": "O worker ADLX não concluiu a operação."}
     exit_code = 1
     try:
-        from adlx import ADLX
-        helper = ADLX.ADLXHelper()
-        if helper.Initialize() != ADLX.ADLX_RESULT.ADLX_OK:
-            payload = {"ok": False, "error": "ADLX não inicializou. Confira o driver AMD."}
-            exit_code = 2
-        else:
-            initialized = True
-            services = helper.GetSystemServices()
-            tuning = services.GetGPUTuningServices()
-            gpu_list = services.GetGPUs()
-            amd_gpus = [item for item in gpu_list if item.VendorId() == "1002"]
-            if mode == "check":
-                adapters = [read_gpu_info(item, tuning) for item in amd_gpus]
-                if not adapters:
-                    payload = {"ok": False, "error": "Nenhuma GPU AMD foi detectada."}
-                    exit_code = 3
-                else:
-                    payload = {"ok": True, "adapters": adapters}
-                    exit_code = 0
-            elif mode == "restore":
-                if profile_id not in GPU_PROFILES:
-                    payload = {"ok": False, "error": "Perfil de GPU inválido."}
-                    exit_code = 4
-                else:
-                    matches = [item for item in amd_gpus
-                               if profile_for_gpu_name(item.Name()) == profile_id]
-                    if len(matches) != 1:
-                        payload = {"ok": False, "error":
-                                   "A restauração exige uma única GPU compatível identificada; nenhuma alteração foi feita."}
-                        exit_code = 5
-                    else:
-                        gpu = matches[0]
-                        info = read_gpu_info(gpu, tuning)
-                        if not info.get("supported"):
-                            payload = {"ok": False, "error": info.get("error", "Ajuste não suportado."), **info}
-                            exit_code = 7
-                        else:
-                            chosen = int(info["default_mhz"])
-                            if not info["minimum_mhz"] <= chosen <= info["maximum_mhz"]:
-                                payload = {"ok": False, "error":
-                                           f"O padrão do driver ({chosen} MHz) está fora da faixa atual.", **info}
-                                exit_code = 8
-                            else:
-                                manual = tuning.GetManualGFXTuning2(gpu)
-                                if manual is None:
-                                    payload = {"ok": False, "error": "Interface ADLX indisponível para restaurar o padrão.", **info}
-                                    exit_code = 9
-                                else:
-                                    result = manual.SetGPUMaxFrequency(chosen)
-                                    readback = int(manual.GetGPUMaxFrequency())
-                                    manual = None
-                                    gc.collect()
-                                    if result != ADLX.ADLX_RESULT.ADLX_OK or readback != chosen:
-                                        payload = {"ok": False, "error":
-                                                   f"O driver não confirmou a restauração para {chosen} MHz (leitura: {readback} MHz).",
-                                                   "current_mhz": readback, **info}
-                                        exit_code = 10
-                                    else:
-                                        payload = {"ok": True, "applied_mhz": readback,
-                                                   "restored_default_mhz": chosen, **info,
-                                                   "profile_name": profile_id}
-                                        exit_code = 0
-            elif profile_id not in GPU_PROFILES:
-                payload = {"ok": False, "error": "Perfil de GPU inválido."}
-                exit_code = 4
+        services = helper.GetSystemServices()
+        tuning = services.GetGPUTuningServices()
+        gpu_list = services.GetGPUs()
+        amd_gpus = [item for item in gpu_list if item.VendorId() == "1002"]
+
+        if mode == "check":
+            adapters = [read_gpu_info(item, tuning) for item in amd_gpus]
+            if not adapters:
+                payload, exit_code = {"ok": False, "error": "Nenhuma GPU AMD foi detectada."}, 3
             else:
-                matches = [item for item in amd_gpus
-                           if profile_for_gpu_name(item.Name()) == profile_id]
-                if len(matches) == 0:
-                    payload = {"ok": False, "error":
-                               f"A GPU selecionada ({profile_id}) não foi encontrada entre as GPUs detectadas."}
-                    exit_code = 5
-                elif len(matches) > 1:
-                    payload = {"ok": False, "error":
-                               f"Foram detectadas {len(matches)} GPUs com o nome {profile_id}. "
-                               "A aplicação foi bloqueada porque não é possível distingui-las com segurança."}
-                    exit_code = 6
+                payload, exit_code = {"ok": True, "adapters": adapters}, 0
+        elif profile_id not in GPU_PROFILES:
+            payload, exit_code = {"ok": False, "error": "Perfil de GPU inválido."}, 4
+        else:
+            matches = [item for item in amd_gpus if profile_for_gpu_name(item.Name()) == profile_id]
+            if len(matches) == 0:
+                payload, exit_code = {
+                    "ok": False,
+                    "error": f"A GPU selecionada ({profile_id}) não foi encontrada entre as GPUs detectadas.",
+                }, 5
+            elif len(matches) > 1:
+                payload, exit_code = {
+                    "ok": False,
+                    "error": (
+                        f"Foram detectadas {len(matches)} GPUs com o nome {profile_id}. "
+                        "A aplicação foi bloqueada porque não é possível distingui-las com segurança."
+                    ),
+                }, 6
+            else:
+                gpu = matches[0]
+                info = read_gpu_info(gpu, tuning)
+                if not info.get("supported"):
+                    payload, exit_code = {"ok": False, "error": info.get("error", "Ajuste não suportado."), **info}, 7
+                elif mode == "restore":
+                    payload, exit_code = _apply_frequency(
+                        gpu, tuning, profile_id, info, int(info["default_mhz"]), ADLX, is_restore=True
+                    )
                 else:
-                    gpu = matches[0]
-                    info = read_gpu_info(gpu, tuning)
-                    if not info.get("supported"):
-                        payload = {"ok": False, "error": info.get("error", "Ajuste não suportado."),
-                                   **info}
-                        exit_code = 7
-                    else:
-                        chosen = int(GPU_PROFILES[profile_id]["reference_boost_mhz"])
-                        if not info["minimum_mhz"] <= chosen <= info["maximum_mhz"]:
-                            payload = {"ok": False, "error":
-                                       f"{chosen} MHz está fora da faixa do driver "
-                                       f"({info['minimum_mhz']}–{info['maximum_mhz']} MHz).", **info}
-                            exit_code = 8
-                        else:
-                            # Reacquire tuning interface for the unique, exactly matched GPU.
-                            manual = tuning.GetManualGFXTuning2(gpu)
-                            if manual is None:
-                                payload = {"ok": False, "error": "Interface ADLX indisponível para aplicar o perfil.", **info}
-                                exit_code = 9
-                            else:
-                                result = manual.SetGPUMaxFrequency(chosen)
-                                readback = int(manual.GetGPUMaxFrequency())
-                                manual = None
-                                gc.collect()
-                                if result != ADLX.ADLX_RESULT.ADLX_OK or readback != chosen:
-                                    payload = {"ok": False, "error":
-                                               f"O driver não confirmou {chosen} MHz (leitura: {readback} MHz).",
-                                               "current_mhz": readback, **info}
-                                    exit_code = 10
-                                else:
-                                    payload = {"ok": True, "applied_mhz": readback,
-                                               **info, "reference_boost_mhz": chosen,
-                                               "profile_name": profile_id}
-                                    exit_code = 0
+                    target_mhz = int(GPU_PROFILES[profile_id]["reference_boost_mhz"])
+                    payload, exit_code = _apply_frequency(
+                        gpu, tuning, profile_id, info, target_mhz, ADLX, is_restore=False
+                    )
+    finally:
+        # Libera todas as interfaces filhas antes de chamar helper.Terminate() para evitar 0xC0000005
+        gpu = tuning = services = gpu_list = amd_gpus = matches = None
+        gc.collect()
+        term = helper.Terminate()
+        helper = None
+        gc.collect()
+        if term != ADLX.ADLX_RESULT.ADLX_OK and payload.get("ok"):
+            payload = {"ok": False, "error": f"ADLX não encerrou corretamente: {term}"}
+            exit_code = 12
+
+    return payload, exit_code
+
+
+def worker(mode: str, profile_id: str | None = None, result_file: str | None = None) -> int:
+    payload: dict[str, Any] = {"ok": False, "error": "O worker ADLX não concluiu a operação."}
+    exit_code = 1
+    try:
+        payload, exit_code = _run_adlx_operation(mode, profile_id)
     except Exception as e:
         payload = {"ok": False, "error": f"Erro ADLX: {type(e).__name__}: {e}"}
         exit_code = 11
-    finally:
-        manual = gpu = tuning = services = gpu_list = amd_gpus = matches = None
-        gc.collect()
-        if helper is not None and initialized:
-            try:
-                from adlx import ADLX
-                term = helper.Terminate()
-                if term != ADLX.ADLX_RESULT.ADLX_OK and payload.get("ok"):
-                    payload = {"ok": False, "error": f"ADLX não encerrou corretamente: {term}"}
-                    exit_code = 12
-            except Exception as e:
-                payload = {"ok": False, "error": f"Falha ao encerrar ADLX: {e}"}
-                exit_code = 12
+
     try:
         write_worker_result(result_file, payload)
     except Exception:
         exit_code = 13
     return exit_code
 
-def run_worker(mode, profile_id=None):
+
+def run_worker(mode: str, profile_id: str | None = None) -> dict[str, Any]:
     if getattr(sys, "frozen", False):
         cmd = [str(Path(sys.executable).resolve()), "--worker", mode]
     else:
@@ -443,33 +497,42 @@ def run_worker(mode, profile_id=None):
     result_path = appdata() / f"worker-{os.getpid()}-{threading.get_ident()}-{time.time_ns()}.json"
     cmd.extend(["--result-file", str(result_path)])
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                           timeout=60, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        p = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
         if result_path.exists():
             data = json.loads(result_path.read_text(encoding="utf-8"))
             if p.returncode != 0:
                 if not data.get("ok") and data.get("error"):
                     data["error"] += f" (worker: código {p.returncode})"
                     return data
-                return {"ok": False, "error":
-                        f"O worker encerrou com código {p.returncode}; operação não considerada confirmada.",
-                        "details": data}
+                return {
+                    "ok": False,
+                    "error": f"O worker encerrou com código {p.returncode}; operação não considerada confirmada.",
+                    "details": data,
+                }
             return data
-        return {"ok": False, "error": p.stderr.strip() or
-                f"Worker terminou sem resultado (código {p.returncode})."}
+        return {"ok": False, "error": p.stderr.strip() or f"Worker terminou sem resultado (código {p.returncode})."}
     except subprocess.TimeoutExpired:
-        return {"ok": False, "error":
-                "A comunicação com o driver excedeu 60 segundos; o valor não foi confirmado."}
+        return {"ok": False, "error": "A comunicação com o driver excedeu 60 segundos; o valor não foi confirmado."}
     except (OSError, ValueError, json.JSONDecodeError) as e:
         return {"ok": False, "error": f"Falha ao consultar o worker: {e}"}
     finally:
-        try: result_path.unlink()
-        except OSError: pass
+        try:
+            result_path.unlink()
+        except OSError:
+            pass
+
 
 class UI:
-    def __init__(self, root, startup_mode=False):
+    def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.startup_mode = startup_mode
         root.title("AMD Clock Boost Fix")
         try:
             root.iconbitmap(default=str(app_icon_path()))
@@ -478,59 +541,62 @@ class UI:
         root.geometry("700x500")
         root.minsize(620, 450)
         root.resizable(True, True)
-        self.status = tk.StringVar(value="Aguardando o driver AMD…" if startup_mode else "Consultando GPUs AMD e o driver…")
+        self.status = tk.StringVar(value="Consultando GPUs AMD e o driver…")
         self.summary = tk.StringVar(value="Aguardando identificação…")
         self.current = tk.StringVar(value="")
         self.range_info = tk.StringVar(value="")
-        self.detected_profile = None
+        self.detected_profile: str | None = None
         self.busy = False
         self.settings = read_settings()
-        try:
-            if startup_link_path().exists():
-                self.settings["startup_enabled"] = True
-        except OSError:
-            pass
+        legacy_link = legacy_startup_link_path()
+        if is_startup_enabled() or (legacy_link is not None and legacy_link.exists()):
+            self.settings["startup_enabled"] = True
         self.autostart_var = tk.BooleanVar(value=bool(self.settings.get("startup_enabled")))
-        frame = ttk.Frame(root, padding=20); frame.pack(fill="both", expand=True)
+
+        frame = ttk.Frame(root, padding=20)
+        frame.pack(fill="both", expand=True)
         ttk.Label(frame, text="AMD Clock Boost Fix", font=("Segoe UI", 15, "bold")).pack(anchor="w")
         ttk.Label(frame, text="GPU identificada", font=("Segoe UI", 10)).pack(anchor="w", pady=(16, 2))
-        ttk.Label(frame, textvariable=self.summary, wraplength=620,
-                  font=("Segoe UI", 17, "bold")).pack(anchor="w", pady=(0, 8))
+        ttk.Label(frame, textvariable=self.summary, wraplength=620, font=("Segoe UI", 17, "bold")).pack(anchor="w", pady=(0, 8))
         ttk.Label(frame, textvariable=self.current, wraplength=620, justify="left").pack(anchor="w", pady=(0, 4))
         ttk.Label(frame, textvariable=self.range_info, wraplength=620, justify="left").pack(anchor="w", pady=(0, 12))
-        self.apply_button = ttk.Button(frame, text="Aplicar referência da GPU",
-                                       command=lambda: self.run("apply"), state="disabled")
+        self.apply_button = ttk.Button(
+            frame, text="Aplicar referência da GPU", command=lambda: self.run("apply"), state="disabled"
+        )
         self.apply_button.pack(anchor="w", pady=(0, 6))
-        self.restore_button = ttk.Button(frame, text="Restaurar clock boost original",
-                                         command=lambda: self.run("restore"), state="disabled")
+        self.restore_button = ttk.Button(
+            frame, text="Restaurar clock boost original", command=lambda: self.run("restore"), state="disabled"
+        )
         self.restore_button.pack(anchor="w", pady=(0, 8))
         self.startup_check = ttk.Checkbutton(
-            frame, text="Reaplicar automaticamente ao entrar no Windows",
-            variable=self.autostart_var, command=self.toggle_autostart, state="disabled")
+            frame,
+            text="Reaplicar automaticamente ao entrar no Windows",
+            variable=self.autostart_var,
+            command=self.toggle_autostart,
+            state="disabled",
+        )
         self.startup_check.pack(anchor="w", pady=(0, 4))
         self.progress = ttk.Progressbar(frame, mode="indeterminate")
         self.progress.pack(fill="x", pady=(12, 6))
         ttk.Label(frame, textvariable=self.status, wraplength=620, justify="left").pack(fill="x", anchor="w")
-        ttk.Label(frame, text="O aplicativo reaplica o limite após o login. O clock instantâneo varia com carga e temperatura.",
-                  wraplength=620, justify="left").pack(fill="x", anchor="w", pady=(8, 0))
-        if startup_mode:
-            self.root.after(15000, self.startup_if_enabled)
-        else:
-            self.root.after(150, lambda: self.run("check"))
+        ttk.Label(
+            frame,
+            text="O aplicativo reaplica o limite após o login. O clock instantâneo varia com carga e temperatura.",
+            wraplength=620,
+            justify="left",
+        ).pack(fill="x", anchor="w", pady=(8, 0))
+
+        self.root.after(150, lambda: self.run("check"))
         self.update_control_states()
 
-    def startup_if_enabled(self):
-        if self.autostart_var.get():
-            self.run("startup")
-
-    def update_control_states(self):
+    def update_control_states(self) -> None:
         button_state = "normal" if not self.busy and self.detected_profile else "disabled"
         self.apply_button.configure(state=button_state)
         self.restore_button.configure(state=button_state)
         can_toggle = bool(self.settings.get("profile_name")) and not self.busy
         self.startup_check.configure(state="normal" if can_toggle else "disabled")
 
-    def toggle_autostart(self):
+    def toggle_autostart(self) -> None:
         enabled = bool(self.autostart_var.get())
         previous = bool(self.settings.get("startup_enabled"))
         if enabled and not self.settings.get("profile_name"):
@@ -542,10 +608,10 @@ class UI:
         try:
             if enabled:
                 write_settings(updated)
-                create_startup_shortcut()
+                enable_startup_entry()
                 self.status.set("Reaplicação automática ativada para o próximo login.")
             else:
-                remove_startup_shortcut()
+                disable_startup_entry()
                 write_settings(updated)
                 self.status.set("Reaplicação automática desativada.")
             self.settings = updated
@@ -553,31 +619,36 @@ class UI:
             self.autostart_var.set(previous)
             rollback = dict(self.settings)
             rollback["startup_enabled"] = previous
-            try: write_settings(rollback)
-            except OSError: pass
             try:
-                if previous: create_startup_shortcut()
-                else: remove_startup_shortcut()
-            except OSError: pass
+                write_settings(rollback)
+            except OSError:
+                pass
+            try:
+                if previous:
+                    enable_startup_entry()
+                else:
+                    disable_startup_entry()
+            except OSError:
+                pass
             messagebox.showerror("Inicialização não alterada", f"Não foi possível atualizar a inicialização do Windows:\n{exc}")
         self.update_control_states()
 
-    def run(self, mode):
-        if self.busy: return
+    def run(self, mode: str) -> None:
+        if self.busy:
+            return
         profile_id = self.detected_profile if mode in ("apply", "restore") else None
         if mode in ("apply", "restore") and profile_id not in GPU_PROFILES:
             messagebox.showerror("GPU indisponível", "Não há uma única GPU compatível identificada para esta ação.")
             return
         if mode == "restore" and not messagebox.askyesno(
-                "Restaurar clock original",
-                "O programa vai restaurar o clock boost padrão reportado pelo driver AMD e desativar a reaplicação automática no login. Deseja continuar?"):
+            "Restaurar clock original",
+            "O programa vai restaurar o clock boost padrão reportado pelo driver AMD e desativar a reaplicação automática no login. Deseja continuar?",
+        ):
             return
         self.busy = True
         self.update_control_states()
         if mode == "check":
             self.status.set("Consultando as GPUs AMD…")
-        elif mode == "startup":
-            self.status.set("Aguardando o driver AMD e validando o perfil salvo…")
         elif mode == "restore":
             self.status.set(f"Validando a GPU e restaurando o clock padrão do driver para {profile_id}…")
         else:
@@ -585,16 +656,16 @@ class UI:
         self.progress.start(12)
         threading.Thread(target=self.work, args=(mode, profile_id), daemon=True).start()
 
-    def work(self, mode, profile_id=None):
-        if mode == "startup":
-            result = apply_saved_startup_profile()
-        else:
-            result = run_worker(mode, profile_id)
-        try: self.root.after(0, self.done, mode, profile_id, result)
-        except tk.TclError: pass
+    def work(self, mode: str, profile_id: str | None = None) -> None:
+        result = run_worker(mode, profile_id)
+        try:
+            self.root.after(0, self.done, mode, profile_id, result)
+        except tk.TclError:
+            pass
 
-    def done(self, mode, profile_id, result):
-        self.progress.stop(); self.busy = False
+    def done(self, mode: str, profile_id: str | None, result: dict[str, Any]) -> None:
+        self.progress.stop()
+        self.busy = False
         if not result.get("ok"):
             self.status.set(result.get("error", "Falha sem detalhe."))
             if mode == "check":
@@ -608,7 +679,7 @@ class UI:
             return
         if mode == "check":
             adapters = result.get("adapters", [])
-            eligible_adapters = {}
+            eligible_adapters: dict[str, list[dict[str, Any]]] = {}
             names = []
             for adapter in adapters:
                 model = adapter.get("profile_name")
@@ -624,7 +695,8 @@ class UI:
                 adapter = eligible_adapters[self.detected_profile][0]
                 reference = GPU_PROFILES[self.detected_profile]["reference_boost_mhz"]
                 self.current.set(
-                    f"Limite atual: {adapter['current_mhz']} MHz  |  Original da GPU: {adapter['default_mhz']} MHz  |  Referência: {reference} MHz")
+                    f"Limite atual: {adapter['current_mhz']} MHz  |  Original da GPU: {adapter['default_mhz']} MHz  |  Referência: {reference} MHz"
+                )
                 self.range_info.set("GPU reconhecida e compatível. O modelo será validado novamente ao aplicar.")
                 self.status.set("GPU pronta para aplicação da referência.")
             elif len(eligible_models) > 1:
@@ -642,11 +714,6 @@ class UI:
         gpu_name = result.get("gpu") or result.get("startup_gpu") or "GPU identificada"
         self.summary.set(gpu_name)
         self.current.set(f"Limite atual: {applied} MHz  |  Referência aplicada: {applied} MHz")
-        if mode == "startup":
-            self.status.set(f"Aplicação automática confirmada pelo driver: {applied} MHz.")
-            self.update_control_states()
-            return
-
         self.status.set(f"O driver confirmou a leitura de retorno em {applied} MHz.")
         if mode == "restore":
             profile = result["profile_name"]
@@ -659,9 +726,9 @@ class UI:
             warnings = []
             self.autostart_var.set(False)
             try:
-                remove_startup_shortcut()
+                disable_startup_entry()
             except OSError as exc:
-                warnings.append(f"atalho de inicialização: {exc}")
+                warnings.append(f"registro de inicialização: {exc}")
             try:
                 write_settings(self.settings)
             except OSError as exc:
@@ -672,14 +739,17 @@ class UI:
                 self.status.set("Clock original restaurado; houve um problema ao desativar a reaplicação automática.")
                 messagebox.showwarning(
                     "Clock restaurado com aviso",
-                    f"O driver confirmou o valor original de {applied} MHz, mas não foi possível concluir a desativação da reaplicação automática:\n{detail}")
+                    f"O driver confirmou o valor original de {applied} MHz, mas não foi possível concluir a desativação da reaplicação automática:\n{detail}",
+                )
             else:
                 self.status.set(f"Clock boost original restaurado e confirmado pelo driver: {applied} MHz.")
                 messagebox.showinfo(
                     "Clock original restaurado",
-                    f"{profile}: o clock boost original de {applied} MHz foi restaurado e confirmado pelo driver. A reaplicação automática foi desativada.")
+                    f"{profile}: o clock boost original de {applied} MHz foi restaurado e confirmado pelo driver. A reaplicação automática foi desativada.",
+                )
             self.update_control_states()
             return
+
         self.settings = {
             "profile_name": result["profile_name"],
             "gpu_name": result["gpu"],
@@ -689,34 +759,57 @@ class UI:
         try:
             write_settings(self.settings)
             if self.settings["startup_enabled"]:
-                create_startup_shortcut()
+                enable_startup_entry()
         except OSError as exc:
             self.status.set(f"Clock aplicado, mas não foi possível salvar/atualizar a inicialização: {exc}")
         self.update_control_states()
         messagebox.showinfo(
             "Aplicação confirmada",
-            f"{result['profile_name']}: referência de {applied} MHz aplicada à GPU detectada e confirmada pelo driver."
+            f"{result['profile_name']}: referência de {applied} MHz aplicada à GPU detectada e confirmada pelo driver.",
         )
 
-def main():
-    parser = argparse.ArgumentParser()
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog=APP)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {APP_VERSION}")
     parser.add_argument("--worker", choices=("check", "apply", "restore"))
     parser.add_argument("--profile", choices=tuple(GPU_PROFILES))
     parser.add_argument("--result-file")
     parser.add_argument("--startup-apply", action="store_true")
-    parser.add_argument("--silent", action="store_true")
     args = parser.parse_args()
-    if args.worker: return worker(args.worker, args.profile, args.result_file)
-    cleanup_legacy_restart_confirmation()
-    if args.startup_apply:
-        time.sleep(15)
-        result = apply_saved_startup_profile()
-        try:
-            write_startup_log(result)
-        except OSError:
-            pass
-        return 0 if result.get("ok") else 1
-    root = tk.Tk(); UI(root); root.mainloop(); return 0
 
-if __name__ == "__main__": raise SystemExit(main())
+    if args.worker:
+        return worker(args.worker, args.profile, args.result_file)
 
+    acquired, mutex_handle = acquire_single_instance_mutex()
+    if not acquired:
+        if not args.startup_apply:
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showinfo(
+                "AMD Clock Boost Fix",
+                "O AMD Clock Boost Fix já está em execução.",
+            )
+            root.destroy()
+        return 0
+
+    try:
+        cleanup_legacy_restart_confirmation()
+        if args.startup_apply:
+            time.sleep(4)
+            result = apply_saved_startup_profile()
+            try:
+                write_startup_log(result)
+            except OSError:
+                pass
+            return 0 if result.get("ok") else 1
+        root = tk.Tk()
+        UI(root)
+        root.mainloop()
+        return 0
+    finally:
+        release_single_instance_mutex(mutex_handle)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
