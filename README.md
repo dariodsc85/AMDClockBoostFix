@@ -54,8 +54,6 @@ A reaplicação acontece após entrar na conta do Windows, não antes da tela de
 | RX 7000 | RX 7900 XT | 2400 MHz |
 | RX 7000 | RX 7900 XTX | 2500 MHz |
 
-Quando a referência oficial apresenta dois clocks (Game e Boost), foi utilizado o maior (Boost). *A RX 7400 aparece com somente um valor, 1100 MHz, que foi mantido como recebido. A linha “Máquina a Vapor GPU” foi excluída por não ser um modelo Radeon RX.
-
 ## Licença e dependências
 
 O código-fonte próprio está sob MIT. A MIT do projeto não cobre as bindings ADLX da AMD incluídas no executável; consulte **THIRD_PARTY_NOTICES.md** antes de redistribuir o binário.
