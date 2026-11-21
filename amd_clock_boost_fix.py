@@ -6,6 +6,7 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 
 APP = "AMDClockBoostFix"
+__version__ = "2.4.0"
 LEGACY_APP = "RX7600ClockHelper"
 BASE = Path(__file__).resolve().parent
 ICON_RELATIVE_PATH = Path("assets") / "amd_clock_boost_fix.ico"
@@ -18,6 +19,12 @@ def app_icon_path():
 # Referências fixas (não são valores de overclock escolhidos pelo usuário).
 # Adicione novos modelos somente após confirmar ID PCI e clock boost de referência.
 GPU_PROFILES = {
+    "RX 550": {"series": "RX 500", "reference_boost_mhz": 1183},
+    "RX 560": {"series": "RX 500", "reference_boost_mhz": 1275},
+    "RX 570": {"series": "RX 500", "reference_boost_mhz": 1244},
+    "RX 580": {"series": "RX 500", "reference_boost_mhz": 1340},
+    "RX 590": {"series": "RX 500", "reference_boost_mhz": 1545},
+    "RX 580 2048SP": {"series": "RX 500", "reference_boost_mhz": 1284},
     "RX 6400": {"series": "RX 6000", "reference_boost_mhz": 2321},
     "RX 6500 XT": {"series": "RX 6000", "reference_boost_mhz": 2815},
     "RX 6600": {"series": "RX 6000", "reference_boost_mhz": 2491},

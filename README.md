@@ -4,6 +4,8 @@ Aplica referências fixas de clock boost para GPUs AMD Radeon RX 6000 e RX 7000,
 
 ## Uso
 
+> **Importante:** o executável depende da pasta `_internal`. Publique e distribua o ZIP completo, não apenas `AMDClockBoostFix.exe`. Extraia todos os arquivos e mantenha `AMDClockBoostFix.exe` e a pasta `_internal` lado a lado; não execute o EXE dentro do ZIP nem mova-o sozinho.
+
 1. Extraia a pasta inteira para um local permanente.
 2. Abra **AMDClockBoostFix.exe** e aplique a referência da GPU identificada.
 3. Marque **Reaplicar automaticamente ao entrar no Windows** para habilitar a reaplicação após o login.
