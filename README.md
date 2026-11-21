@@ -1,13 +1,13 @@
 # AMD Clock Boost Fix
 
-Aplica referências fixas de clock boost para GPUs AMD Radeon RX 6000 e RX 7000, com identificação automática do modelo.
+Aplica referências fixas de clock boost para GPUs AMD Radeon RX com identificação automática do modelo.
 
 ## Uso
 
-> **Importante:** o executável depende da pasta `_internal`. Publique e distribua o ZIP completo, não apenas `AMDClockBoostFix.exe`. Extraia todos os arquivos e mantenha `AMDClockBoostFix.exe` e a pasta `_internal` lado a lado; não execute o EXE dentro do ZIP nem mova-o sozinho.
+> **Importante:** salve o `AMDClockBoostFix.exe` em uma pasta permanente antes de ativar a inicialização automática, pois o atalho criado no Windows aponta para o local atual do executável.
 
-1. Extraia a pasta inteira para um local permanente.
-2. Abra **AMDClockBoostFix.exe** e aplique a referência da GPU identificada.
+1. Baixe o **`AMDClockBoostFix.exe`** na aba [Releases](../../releases) e mova-o para um local permanente.
+2. Abra o **AMDClockBoostFix.exe** e clique em **Aplicar referência da GPU** para configurar o modelo identificado.
 3. Marque **Reaplicar automaticamente ao entrar no Windows** para habilitar a reaplicação após o login.
 4. Use **Restaurar clock boost original** para voltar ao valor padrão informado pelo driver AMD. Essa ação desativa a reaplicação automática para que a referência do programa não seja aplicada novamente no próximo login.
 
@@ -25,6 +25,12 @@ A reaplicação acontece após entrar na conta do Windows, não antes da tela de
 
 | Linha | GPU | Clock do perfil |
 | --- | --- | ---: |
+| RX 500 | RX 550 | 1183 MHz |
+| RX 500 | RX 560 | 1275 MHz |
+| RX 500 | RX 570 | 1244 MHz |
+| RX 500 | RX 580 | 1340 MHz |
+| RX 500 | RX 580 2048SP | 1284 MHz |
+| RX 500 | RX 590 | 1545 MHz |
 | RX 6000 | RX 6400 | 2321 MHz |
 | RX 6000 | RX 6500 XT | 2815 MHz |
 | RX 6000 | RX 6600 | 2491 MHz |
@@ -48,7 +54,7 @@ A reaplicação acontece após entrar na conta do Windows, não antes da tela de
 | RX 7000 | RX 7900 XT | 2400 MHz |
 | RX 7000 | RX 7900 XTX | 2500 MHz |
 
-Quando a planilha tem dois clocks, foi usado o maior. *A RX 7400 aparece com somente um valor, 1100 MHz, que foi mantido como recebido. A linha “Máquina a Vapor GPU” foi excluída por não ser um modelo Radeon RX.
+Quando a referência oficial apresenta dois clocks (Game e Boost), foi utilizado o maior (Boost). *A RX 7400 aparece com somente um valor, 1100 MHz, que foi mantido como recebido. A linha “Máquina a Vapor GPU” foi excluída por não ser um modelo Radeon RX.
 
 ## Licença e dependências
 
